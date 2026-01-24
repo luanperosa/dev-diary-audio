@@ -207,6 +207,8 @@ async function loadRecordingsList() {
     // Use new data structure: dayData.sessions and dayData.transcript
     const sessions = dayData.sessions || []
     const transcript = dayData.transcript
+    const diary = dayData.diary
+    const dayPath = dayData.path // Get the day path for IPC calls
     
     if (sessions.length > 0) {
       html += `<br><hr><h2>${date}</h2>`
@@ -227,6 +229,24 @@ async function loadRecordingsList() {
         html += `<div id="transcript-${date}" style="display: block; margin-top: 10px;">
                    <textarea readonly style="width: 100%; height: 300px; font-family: monospace; font-size: 0.9em; padding: 10px;">${transcript.content}</textarea>
                  </div>`
+        
+        // Developer Diary section (only shown if transcript exists)
+        html += `<div style="margin-top: 15px; padding: 10px; background-color: #e7f3ff; border-radius: 5px;">`
+        html += `<h4 style="margin: 5px 0;">Developer Diary</h4>`
+        
+        // Check if diary already exists
+        if (diary) {
+          html += `<p style="color: #28a745; margin: 5px 0;"><strong>✓ Diary available</strong></p>`
+          html += `<button class="toggle-diary-btn" data-date="${date}" style="margin: 5px 0;">Hide Diary</button>`
+          html += `<div id="diary-${date}" style="display: block; margin-top: 10px;">
+                     <textarea readonly style="width: 100%; height: 300px; font-family: sans-serif; font-size: 0.95em; padding: 10px; line-height: 1.5;">${diary.content}</textarea>
+                   </div>`
+        } else {
+          html += `<button class="generate-diary-btn" data-date="${date}" data-path="${dayPath}" style="margin: 5px 0;">Generate Developer Diary</button>`
+          html += `<p id="diary-status-${date}" style="margin: 5px 0; font-size: 0.9em;"></p>`
+        }
+        
+        html += `</div>`
       } else {
         html += `<button class="generate-transcript-btn" data-date="${date}">Generate Transcription for ${date}</button>`
         html += `<p id="status-${date}" style="margin: 5px 0; font-size: 0.9em;"></p>`
@@ -240,6 +260,7 @@ async function loadRecordingsList() {
   
   // Attach event listeners after rendering
   attachTranscriptionEventListeners()
+  attachDiaryEventListeners()
 }
 
 // Attach event listeners to transcription buttons
@@ -259,6 +280,89 @@ function attachTranscriptionEventListeners() {
       toggleTranscript(date)
     })
   })
+}
+
+// Attach event listeners to diary buttons
+function attachDiaryEventListeners() {
+  // Generate diary buttons
+  document.querySelectorAll('.generate-diary-btn').forEach(button => {
+    button.addEventListener('click', (e) => {
+      const date = e.target.getAttribute('data-date')
+      const dayPath = e.target.getAttribute('data-path')
+      generateDiary(date, dayPath)
+    })
+  })
+  
+  // Toggle diary view buttons
+  document.querySelectorAll('.toggle-diary-btn').forEach(button => {
+    button.addEventListener('click', (e) => {
+      const date = e.target.getAttribute('data-date')
+      toggleDiary(date)
+    })
+  })
+}
+
+// Generate developer diary from transcript
+async function generateDiary(date, dayPath) {
+  const statusEl = document.getElementById(`diary-status-${date}`)
+  const generateBtn = document.querySelector(`.generate-diary-btn[data-date="${date}"]`)
+  
+  if (!statusEl || !generateBtn) return
+  
+  try {
+    // Disable button and show loading
+    generateBtn.disabled = true
+    generateBtn.textContent = 'Generating...'
+    statusEl.textContent = 'Calling OpenAI API to generate diary...'
+    statusEl.style.color = '#007bff'
+    
+    // Call the generate-diary IPC handler
+    const result = await window.audioAPI.generateDiary(dayPath)
+    
+    if (result.success) {
+      statusEl.textContent = '✓ Diary generated successfully! Reloading...'
+      statusEl.style.color = '#28a745'
+      
+      // Reload the recordings list to show the toggle button
+      setTimeout(() => {
+        loadRecordingsList()
+      }, 1000)
+    } else {
+      // Show error
+      statusEl.textContent = `Error: ${result.error}`
+      statusEl.style.color = '#dc3545'
+      
+      // Re-enable button
+      generateBtn.disabled = false
+      generateBtn.textContent = 'Retry Generate Diary'
+      generateBtn.style.backgroundColor = '#dc3545'
+    }
+  } catch (error) {
+    console.error('Error generating diary:', error)
+    statusEl.textContent = `Error: ${error.message}`
+    statusEl.style.color = '#dc3545'
+    
+    // Re-enable button
+    generateBtn.disabled = false
+    generateBtn.textContent = 'Retry Generate Diary'
+    generateBtn.style.backgroundColor = '#dc3545'
+  }
+}
+
+// Toggle diary visibility
+function toggleDiary(date) {
+  const diaryDiv = document.getElementById(`diary-${date}`)
+  const toggleBtn = document.querySelector(`.toggle-diary-btn[data-date="${date}"]`)
+  
+  if (diaryDiv && toggleBtn) {
+    if (diaryDiv.style.display === 'none') {
+      diaryDiv.style.display = 'block'
+      toggleBtn.textContent = 'Hide Diary'
+    } else {
+      diaryDiv.style.display = 'none'
+      toggleBtn.textContent = 'Show Diary'
+    }
+  }
 }
 
 // Run checks and load data on startup

@@ -1,7 +1,8 @@
 📄 ADR-001 — Electron App Foundation, Audio Recording and Local Storage
 
-Status: Accepted
+Status: Implemented
 Date: 2026-01-23
+Implementation Date: 2026-01-23
 Phase: Phase 1 — Foundation (MVP)
 
 Context
@@ -202,26 +203,43 @@ Performance optimizations
 
 These concerns will be addressed in future ADRs.
 
-Notes
+## Implementation Status
+
+**Status: Fully Implemented (2026-01-23)**
+
+### Completed Features
+
+✅ Audio recording with MediaRecorder API
+✅ 60-second chunking with disk appending
+✅ Single file per session output
+✅ ffmpeg post-processing for metadata
+✅ Recordings list UI organized by date
+✅ Graceful degradation without ffmpeg
+✅ Session-based directory structure
+✅ Mono audio (44.1kHz) with echo cancellation and noise suppression
+✅ Content Security Policy compliant
+
+### Files Involved
+- [main.js](../../main.js) - IPC handlers for recording, ffmpeg checks, file operations
+- [renderer.js](../../renderer.js) - MediaRecorder logic, UI management
+- [preload.js](../../preload.js) - Context bridge for audio API
+- [index.html](../../index.html) - Basic UI structure
+
+### Storage Structure
+```
+~/.config/dev-diary-audio/recordings/
+  └── 2026-01-24/
+      ├── session-09-30-15/
+      │   └── recording.webm
+      ├── session-14-20-30/
+      │   └── recording.webm
+      └── transcript-2026-01-24.txt  (added in Phase 1.5)
+```
+
+## Notes
 
 This ADR intentionally prioritizes reliability and simplicity over feature richness.
 
-Implementation completed:
-
-Audio recording with MediaRecorder API
-
-60-second chunking with disk appending
-
-Single file per session output
-
-ffmpeg post-processing for metadata
-
-Recordings list UI organized by date
-
-Graceful degradation without ffmpeg
-
-Once this foundation is stable, subsequent ADRs will define:
-
-Transcription engine selection
-
-AI integration boundaries
+Foundation is stable and production-ready. Subsequent ADRs build on this:
+- **ADR-002**: Local transcription with Whisper
+- **ADR-003**: Developer diary generation via OpenAI API

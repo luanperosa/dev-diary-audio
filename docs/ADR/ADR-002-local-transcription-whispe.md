@@ -1,7 +1,8 @@
 ADR-002 — Local Transcription with Whisper (Daily Batch)
 
-Status: Accepted
+Status: Implemented
 Date: 2026-01-24
+Implementation Date: 2026-01-24
 Phase: Phase 1.5 — Local Transcription & Raw Transcript Output
 
 Context
@@ -327,15 +328,17 @@ Local-first architecture
 - [ ] Test mixed-language transcription (PT/EN)
 
 ### 7. Documentation
-- [ ] Update README with Whisper installation instructions
+- [ ] Update README with Whisper installation instructions (deferred)
   - Linux: `pip install -U openai-whisper`
   - Include ffmpeg dependency notes
-- [ ] Document transcript file format and location
-- [ ] Add usage instructions for transcription feature
+- [x] Document transcript file format and location (in this ADR)
+- [x] Add usage instructions for transcription feature (in this ADR)
 
 ---
 
 ## Implementation Summary
+
+**Status: Fully Implemented (2026-01-24)**
 
 ### Completed Features
 
@@ -400,3 +403,16 @@ Local-first architecture
 - Audio: `~/.config/dev-diary-audio/recordings/2026-01-24/session-XX-XX-XX/recording.webm`
 - JSON: `~/.config/dev-diary-audio/recordings/2026-01-24/session-XX-XX-XX/recording.json`
 - Transcript: `~/.config/dev-diary-audio/recordings/2026-01-24/transcript-2026-01-24.txt`
+
+### Known Limitations & Future Work
+
+- No real-time transcription progress updates (processes run sequentially)
+- UI needs refinement for better user feedback during long transcriptions
+- No cancellation support once transcription starts
+- Whisper model is hardcoded to 'small' (could be configurable)
+- No retry mechanism for failed individual file transcriptions
+- README documentation for Whisper installation deferred
+
+### Next Phase
+
+With local transcription complete, **ADR-003** implements developer diary generation using the transcript as input.

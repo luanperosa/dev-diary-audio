@@ -17,5 +17,9 @@ contextBridge.exposeInMainWorld('audioAPI', {
     listRecordings: () => ipcRenderer.invoke('list-recordings'),
     transcribeDay: (dateString) => ipcRenderer.invoke('transcribe-day', dateString),
     runWhisperTranscription: (audioFilePath) => ipcRenderer.invoke('run-whisper-transcription', audioFilePath),
-    mergeTranscripts: (dateString) => ipcRenderer.invoke('merge-transcripts', dateString)
+    mergeTranscripts: (dateString) => ipcRenderer.invoke('merge-transcripts', dateString),
+    // Diary generation API
+    generateDiary: (dayPath) => ipcRenderer.invoke('generate-diary', dayPath),
+    readDiary: (dayPath) => ipcRenderer.invoke('read-diary', dayPath),
+    checkDiaryExists: (dayPath) => ipcRenderer.invoke('check-diary-exists', dayPath)
 })

@@ -3,8 +3,13 @@ const path = require('node:path')
 const fs = require('node:fs')
 const { exec } = require('node:child_process')
 const { promisify } = require('node:util')
+require('dotenv').config()
 
 const execAsync = promisify(exec)
+
+// Load OpenAI adapter for diary generation
+const OpenAIAdapter = require('./lib/api/openai-adapter')
+const { getSystemPrompt, getUserPrompt } = require('./lib/prompts/diary-prompt')
 
 // Helper function to format timestamp (seconds to HH:MM:SS)
 function formatTimestamp(seconds) {
@@ -185,21 +190,34 @@ app.whenReady().then(() => {
                 const txtFiles = filesInDateFolder.filter(file => file.endsWith('.txt'))
                 
                 let transcriptData = null
-                if (txtFiles.length > 0) {
-                    // Use the first .txt file found (usually transcript-YYYY-MM-DD.txt)
-                    const transcriptPath = path.join(datePath, txtFiles[0])
-                    const transcriptContent = fs.readFileSync(transcriptPath, 'utf8')
-                    transcriptData = {
-                        path: transcriptPath,
-                        content: transcriptContent,
-                        filename: txtFiles[0]
+                let diaryData = null
+                
+                for (const txtFile of txtFiles) {
+                    const txtPath = path.join(datePath, txtFile)
+                    const txtContent = fs.readFileSync(txtPath, 'utf8')
+                    
+                    if (txtFile === 'diary.txt') {
+                        diaryData = {
+                            path: txtPath,
+                            content: txtContent,
+                            filename: txtFile
+                        }
+                        console.log(`[list-recordings] Found diary for ${dateDir}`)
+                    } else if (txtFile.startsWith('transcript-') || txtFile === 'transcript.txt') {
+                        transcriptData = {
+                            path: txtPath,
+                            content: txtContent,
+                            filename: txtFile
+                        }
+                        console.log(`[list-recordings] Found transcript for ${dateDir}: ${txtFile}`)
                     }
-                    console.log(`[list-recordings] Found transcript for ${dateDir}: ${txtFiles[0]}`)
                 }
                 
                 recordings[dateDir] = {
+                    path: datePath,  // Add the day folder path
                     sessions: sessions,
-                    transcript: transcriptData
+                    transcript: transcriptData,
+                    diary: diaryData
                 }
             }
             
@@ -446,6 +464,124 @@ app.whenReady().then(() => {
             console.error('[merge-transcripts] Error:', error)
             return {
                 success: false,
+                error: error.message
+            }
+        }
+    })
+    
+    // Diary generation IPC handlers
+    ipcMain.handle('generate-diary', async (event, dayPath) => {
+        try {
+            console.log('[generate-diary] Starting for path:', dayPath)
+            
+            // Check if transcript exists
+            const transcriptPath = path.join(dayPath, 'transcript.txt')
+            if (!fs.existsSync(transcriptPath)) {
+                return {
+                    success: false,
+                    error: 'Transcript file not found. Please transcribe the audio first.'
+                }
+            }
+            
+            // Read the transcript
+            const transcript = fs.readFileSync(transcriptPath, 'utf8')
+            if (!transcript || transcript.trim().length === 0) {
+                return {
+                    success: false,
+                    error: 'Transcript file is empty.'
+                }
+            }
+            
+            console.log('[generate-diary] Transcript loaded, length:', transcript.length)
+            
+            // Initialize OpenAI adapter
+            const adapter = new OpenAIAdapter()
+            
+            // Validate configuration
+            const validation = await adapter.validate()
+            if (!validation.valid) {
+                return {
+                    success: false,
+                    error: validation.error
+                }
+            }
+            
+            console.log('[generate-diary] Calling OpenAI API...')
+            
+            // Generate diary using custom prompts
+            const result = await adapter.generateDiary(transcript, {
+                systemPrompt: getSystemPrompt(),
+                userPrompt: getUserPrompt(transcript)
+            })
+            
+            if (!result.success) {
+                return result
+            }
+            
+            console.log('[generate-diary] API call successful, saving to disk...')
+            
+            // Save diary to disk
+            const diaryPath = path.join(dayPath, 'diary.txt')
+            fs.writeFileSync(diaryPath, result.content, 'utf8')
+            
+            console.log('[generate-diary] Diary saved:', diaryPath)
+            
+            return {
+                success: true,
+                path: diaryPath,
+                content: result.content
+            }
+        } catch (error) {
+            console.error('[generate-diary] Error:', error)
+            return {
+                success: false,
+                error: error.message || 'An unexpected error occurred while generating the diary.'
+            }
+        }
+    })
+    
+    ipcMain.handle('read-diary', async (event, dayPath) => {
+        try {
+            const diaryPath = path.join(dayPath, 'diary.txt')
+            
+            if (!fs.existsSync(diaryPath)) {
+                return {
+                    success: false,
+                    error: 'Diary file not found.'
+                }
+            }
+            
+            const content = fs.readFileSync(diaryPath, 'utf8')
+            
+            return {
+                success: true,
+                path: diaryPath,
+                content: content
+            }
+        } catch (error) {
+            console.error('[read-diary] Error:', error)
+            return {
+                success: false,
+                error: error.message
+            }
+        }
+    })
+    
+    ipcMain.handle('check-diary-exists', async (event, dayPath) => {
+        try {
+            const diaryPath = path.join(dayPath, 'diary.txt')
+            const exists = fs.existsSync(diaryPath)
+            
+            return {
+                success: true,
+                exists: exists,
+                path: diaryPath
+            }
+        } catch (error) {
+            console.error('[check-diary-exists] Error:', error)
+            return {
+                success: false,
+                exists: false,
                 error: error.message
             }
         }
