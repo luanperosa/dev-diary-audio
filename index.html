@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; media-src 'self' blob:"
+    />
+    <meta
+      http-equiv="X-Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'"
+    />
+    <title>Developer Diary Audio Recorder</title>
+  </head>
+  <body>
+    <h1>Developer Diary Audio Recorder</h1>
+    
+    <div>
+      <button id="recordBtn">Record</button>
+      <button id="stopBtn" disabled>Stop</button>
+    </div>
+    
+    <p id="recordingStatus">Ready</p>
+    
+    <br>
+    <hr>
+    <h2>Recordings</h2>
+    <div id="recordingsList"></div>
+    
+    <p id="info"></p>
+  </body>
+  <script src="./renderer.js"></script>
+</html>
