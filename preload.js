@@ -13,5 +13,9 @@ contextBridge.exposeInMainWorld('audioAPI', {
         ipcRenderer.invoke('append-audio-chunk', arrayBuffer, sessionPath, filename),
     remuxAudio: (inputPath) => ipcRenderer.invoke('remux-audio', inputPath),
     checkFfmpeg: () => ipcRenderer.invoke('check-ffmpeg'),
-    listRecordings: () => ipcRenderer.invoke('list-recordings')
+    checkWhisper: () => ipcRenderer.invoke('check-whisper'),
+    listRecordings: () => ipcRenderer.invoke('list-recordings'),
+    transcribeDay: (dateString) => ipcRenderer.invoke('transcribe-day', dateString),
+    runWhisperTranscription: (audioFilePath) => ipcRenderer.invoke('run-whisper-transcription', audioFilePath),
+    mergeTranscripts: (dateString) => ipcRenderer.invoke('merge-transcripts', dateString)
 })

@@ -6,10 +6,22 @@ const { promisify } = require('node:util')
 
 const execAsync = promisify(exec)
 
+// Helper function to format timestamp (seconds to HH:MM:SS)
+function formatTimestamp(seconds) {
+    const hrs = Math.floor(seconds / 3600)
+    const mins = Math.floor((seconds % 3600) / 60)
+    const secs = Math.floor(seconds % 60)
+    
+    if (hrs > 0) {
+        return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
+    }
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`
+}
+
 const createWindow = () => {
   const win = new BrowserWindow({
-    width: 800,
-    height: 600,
+    width: 1200,
+    height: 800,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js')
     }
@@ -70,6 +82,53 @@ app.whenReady().then(() => {
         }
     })
     
+    ipcMain.handle('check-whisper', async () => {
+        try {
+            // Whisper doesn't have --version flag, use --help and check if it's available
+            const { stdout, stderr } = await execAsync('whisper --help')
+            const output = stdout || stderr
+            
+            console.log('[check-whisper] Success - stdout length:', stdout?.length, 'stderr length:', stderr?.length)
+            
+            // If output contains "usage: whisper", it's installed
+            if (output.includes('usage: whisper')) {
+                console.log('[check-whisper] Whisper detected as installed')
+                return { 
+                    installed: true, 
+                    version: 'installed',
+                    instructions: ''
+                }
+            }
+            
+            console.log('[check-whisper] Output does not contain "usage: whisper"')
+            return { 
+                installed: false, 
+                error: 'Whisper command not found',
+                instructions: 'Install Whisper with: pip install -U openai-whisper\nNote: ffmpeg is also required for Whisper to work properly.'
+            }
+        } catch (error) {
+            console.log('[check-whisper] Error caught:', error.message)
+            console.log('[check-whisper] Error stdout:', error.stdout)
+            console.log('[check-whisper] Error stderr:', error.stderr)
+            
+            // Check if error output contains whisper usage (means it's installed)
+            if (error.stdout?.includes('usage: whisper') || error.stderr?.includes('usage: whisper')) {
+                console.log('[check-whisper] Whisper detected in error output')
+                return { 
+                    installed: true, 
+                    version: 'installed',
+                    instructions: ''
+                }
+            }
+            
+            return { 
+                installed: false, 
+                error: error.message,
+                instructions: 'Install Whisper with: pip install -U openai-whisper\nNote: ffmpeg is also required for Whisper to work properly.'
+            }
+        }
+    })
+    
     ipcMain.handle('list-recordings', async () => {
         try {
             const recordingsDir = path.join(app.getPath('userData'), 'recordings')
@@ -100,7 +159,7 @@ app.whenReady().then(() => {
                     .sort()
                     .reverse() // Most recent first
                 
-                recordings[dateDir] = []
+                const sessions = []
                 
                 for (const sessionDir of sessionDirs) {
                     const sessionPath = path.join(datePath, sessionDir)
@@ -111,7 +170,7 @@ app.whenReady().then(() => {
                         const filePath = path.join(sessionPath, files[0])
                         const stats = fs.statSync(filePath)
                         
-                        recordings[dateDir].push({
+                        sessions.push({
                             sessionName: sessionDir,
                             filename: files[0],
                             path: filePath,
@@ -119,6 +178,28 @@ app.whenReady().then(() => {
                             modified: stats.mtime
                         })
                     }
+                }
+                
+                // Look for any .txt file in the date folder (transcript)
+                const filesInDateFolder = fs.readdirSync(datePath)
+                const txtFiles = filesInDateFolder.filter(file => file.endsWith('.txt'))
+                
+                let transcriptData = null
+                if (txtFiles.length > 0) {
+                    // Use the first .txt file found (usually transcript-YYYY-MM-DD.txt)
+                    const transcriptPath = path.join(datePath, txtFiles[0])
+                    const transcriptContent = fs.readFileSync(transcriptPath, 'utf8')
+                    transcriptData = {
+                        path: transcriptPath,
+                        content: transcriptContent,
+                        filename: txtFiles[0]
+                    }
+                    console.log(`[list-recordings] Found transcript for ${dateDir}: ${txtFiles[0]}`)
+                }
+                
+                recordings[dateDir] = {
+                    sessions: sessions,
+                    transcript: transcriptData
                 }
             }
             
@@ -171,6 +252,203 @@ app.whenReady().then(() => {
                 }
             })
         })
+    })
+    
+    // Transcription IPC handlers
+    ipcMain.handle('transcribe-day', async (event, dateString) => {
+        try {
+            const recordingsDir = path.join(app.getPath('userData'), 'recordings')
+            const datePath = path.join(recordingsDir, dateString)
+            
+            // Check if date folder exists
+            if (!fs.existsSync(datePath)) {
+                return { 
+                    success: false, 
+                    error: `No recordings found for ${dateString}` 
+                }
+            }
+            
+            // Scan for all .webm files in all session folders for this date
+            const sessionDirs = fs.readdirSync(datePath)
+                .filter(item => {
+                    const fullPath = path.join(datePath, item)
+                    return fs.statSync(fullPath).isDirectory()
+                })
+                .sort() // Chronological order
+            
+            const audioFiles = []
+            
+            for (const sessionDir of sessionDirs) {
+                const sessionPath = path.join(datePath, sessionDir)
+                const files = fs.readdirSync(sessionPath)
+                    .filter(file => file.endsWith('.webm'))
+                    .map(file => ({
+                        filename: file,
+                        path: path.join(sessionPath, file),
+                        session: sessionDir
+                    }))
+                
+                audioFiles.push(...files)
+            }
+            
+            if (audioFiles.length === 0) {
+                return { 
+                    success: false, 
+                    error: `No audio files found for ${dateString}` 
+                }
+            }
+            
+            console.log(`[transcribe-day] Found ${audioFiles.length} audio files for ${dateString}`)
+            
+            return { 
+                success: true, 
+                dateString,
+                files: audioFiles,
+                count: audioFiles.length
+            }
+        } catch (error) {
+            console.error('[transcribe-day] Error:', error)
+            return { 
+                success: false, 
+                error: error.message 
+            }
+        }
+    })
+    
+    ipcMain.handle('run-whisper-transcription', async (event, audioFilePath) => {
+        try {
+            const audioDir = path.dirname(audioFilePath)
+            const audioFileName = path.basename(audioFilePath)
+            
+            console.log(`[run-whisper-transcription] Starting transcription for: ${audioFileName}`)
+            
+            // Run Whisper CLI command
+            // whisper <audio-file> --model small --output_format json --output_dir <output-dir>
+            const whisperCmd = `whisper "${audioFilePath}" --model small --output_format json --output_dir "${audioDir}"`
+            
+            console.log(`[run-whisper-transcription] Command: ${whisperCmd}`)
+            
+            const { stdout, stderr } = await execAsync(whisperCmd, { 
+                maxBuffer: 10 * 1024 * 1024 // 10MB buffer for long outputs
+            })
+            
+            console.log(`[run-whisper-transcription] Completed: ${audioFileName}`)
+            
+            // Whisper creates a .json file with the same base name as the audio file
+            const audioBaseName = path.basename(audioFilePath, path.extname(audioFilePath))
+            const jsonOutputPath = path.join(audioDir, `${audioBaseName}.json`)
+            
+            // Verify the JSON file was created
+            if (!fs.existsSync(jsonOutputPath)) {
+                return {
+                    success: false,
+                    error: 'Whisper completed but JSON output file not found',
+                    stderr: stderr
+                }
+            }
+            
+            return { 
+                success: true, 
+                audioFile: audioFilePath,
+                jsonFile: jsonOutputPath,
+                stdout: stdout,
+                stderr: stderr
+            }
+        } catch (error) {
+            console.error('[run-whisper-transcription] Error:', error)
+            return { 
+                success: false, 
+                error: error.message,
+                stderr: error.stderr || ''
+            }
+        }
+    })
+    
+    ipcMain.handle('merge-transcripts', async (event, dateString) => {
+        try {
+            const recordingsDir = path.join(app.getPath('userData'), 'recordings')
+            const datePath = path.join(recordingsDir, dateString)
+            
+            console.log(`[merge-transcripts] Merging transcripts for ${dateString}`)
+            
+            // Find all session directories
+            const sessionDirs = fs.readdirSync(datePath)
+                .filter(item => {
+                    const fullPath = path.join(datePath, item)
+                    return fs.statSync(fullPath).isDirectory()
+                })
+                .sort() // Chronological order
+            
+            const allSegments = []
+            
+            // Read all JSON transcription files
+            for (const sessionDir of sessionDirs) {
+                const sessionPath = path.join(datePath, sessionDir)
+                const jsonFiles = fs.readdirSync(sessionPath)
+                    .filter(file => file.endsWith('.json'))
+                    .sort()
+                
+                for (const jsonFile of jsonFiles) {
+                    const jsonPath = path.join(sessionPath, jsonFile)
+                    const transcriptData = JSON.parse(fs.readFileSync(jsonPath, 'utf8'))
+                    
+                    // Whisper JSON format has a "segments" array and a "text" field
+                    if (transcriptData.segments) {
+                        // Add metadata about source file
+                        const segments = transcriptData.segments.map(seg => ({
+                            ...seg,
+                            sourceFile: jsonFile,
+                            sourceSession: sessionDir
+                        }))
+                        allSegments.push(...segments)
+                    }
+                }
+            }
+            
+            if (allSegments.length === 0) {
+                return {
+                    success: false,
+                    error: 'No transcript segments found'
+                }
+            }
+            
+            // Generate merged transcript text
+            let mergedText = `# Developer Diary Transcript - ${dateString}\n\n`
+            
+            let currentSession = null
+            for (const segment of allSegments) {
+                // Add session header when session changes
+                if (segment.sourceSession !== currentSession) {
+                    currentSession = segment.sourceSession
+                    mergedText += `\n## ${currentSession}\n\n`
+                }
+                
+                // Format: [timestamp] text
+                const startTime = formatTimestamp(segment.start)
+                mergedText += `[${startTime}] ${segment.text.trim()}\n`
+            }
+            
+            // Save merged transcript
+            const transcriptFileName = `transcript-${dateString}.txt`
+            const transcriptPath = path.join(datePath, transcriptFileName)
+            
+            fs.writeFileSync(transcriptPath, mergedText, 'utf8')
+            
+            console.log(`[merge-transcripts] Saved merged transcript: ${transcriptPath}`)
+            
+            return {
+                success: true,
+                transcriptPath: transcriptPath,
+                transcriptText: mergedText,
+                segmentCount: allSegments.length
+            }
+        } catch (error) {
+            console.error('[merge-transcripts] Error:', error)
+            return {
+                success: false,
+                error: error.message
+            }
+        }
     })
     
     createWindow()

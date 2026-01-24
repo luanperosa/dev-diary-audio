@@ -4,9 +4,40 @@ const stopBtn = document.getElementById('stopBtn')
 const statusElement = document.getElementById('recordingStatus')
 const information = document.getElementById('info')
 const recordingsList = document.getElementById('recordingsList')
+const whisperStatusDiv = document.getElementById('whisperStatus')
 
 // Display version info
 information.innerText = `This app is using Chrome (v${versions.chrome()}), Node.js (v${versions.node()}), and Electron (v${versions.electron()})`
+
+// Check Whisper installation on startup
+async function checkWhisperInstallation() {
+  try {
+    console.log('[renderer] Checking Whisper installation...')
+    const result = await window.audioAPI.checkWhisper()
+    console.log('[renderer] Whisper check result:', result)
+    
+    if (!result.installed) {
+      // Build and show warning banner
+      whisperStatusDiv.innerHTML = `
+        <div style="padding: 10px; margin: 10px 0; border-radius: 5px; background-color: #fff3cd; border: 1px solid #ffc107; color: #856404;">
+          <strong>⚠️ Whisper not installed</strong>
+          <p style="margin: 5px 0; font-size: 0.9em;">${result.instructions}</p>
+        </div>
+      `
+      whisperStatusDiv.style.display = 'block'
+      console.log('[renderer] Showing Whisper not installed warning')
+    } else {
+      // Whisper is installed, keep div hidden
+      whisperStatusDiv.style.display = 'none'
+      console.log('[renderer] Whisper installed:', result.version)
+    }
+  } catch (error) {
+    console.error('[renderer] Error checking Whisper installation:', error)
+  }
+}
+
+// Run checks on startup
+checkWhisperInstallation()
 
 // Recording state
 let isRecording = false
@@ -171,7 +202,11 @@ async function loadRecordingsList() {
   let html = ''
   
   for (const date of dates) {
-    const sessions = recordings[date]
+    const dayData = recordings[date]
+    
+    // Use new data structure: dayData.sessions and dayData.transcript
+    const sessions = dayData.sessions || []
+    const transcript = dayData.transcript
     
     if (sessions.length > 0) {
       html += `<br><hr><h2>${date}</h2>`
@@ -181,10 +216,49 @@ async function loadRecordingsList() {
         const time = session.sessionName.replace('session-', '')
         html += `<p>${time} - ${session.filename} (${sizeInMB} MB)</p>`
       }
+      
+      // Transcription section for this day
+      html += `<div style="margin-top: 15px; padding: 10px; background-color: #f8f9fa; border-radius: 5px;">`
+      
+      // Check if transcript already exists
+      if (transcript) {
+        html += `<p style="color: #28a745; margin: 5px 0;"><strong>✓ Transcript available</strong></p>`
+        html += `<button class="toggle-transcript-btn" data-date="${date}" style="margin: 5px 0;">Hide Transcript</button>`
+        html += `<div id="transcript-${date}" style="display: block; margin-top: 10px;">
+                   <textarea readonly style="width: 100%; height: 300px; font-family: monospace; font-size: 0.9em; padding: 10px;">${transcript.content}</textarea>
+                 </div>`
+      } else {
+        html += `<button class="generate-transcript-btn" data-date="${date}">Generate Transcription for ${date}</button>`
+        html += `<p id="status-${date}" style="margin: 5px 0; font-size: 0.9em;"></p>`
+      }
+      
+      html += `</div>`
     }
   }
   
   recordingsList.innerHTML = html
+  
+  // Attach event listeners after rendering
+  attachTranscriptionEventListeners()
+}
+
+// Attach event listeners to transcription buttons
+function attachTranscriptionEventListeners() {
+  // Generate/Regenerate transcription buttons
+  document.querySelectorAll('.generate-transcript-btn').forEach(button => {
+    button.addEventListener('click', (e) => {
+      const date = e.target.getAttribute('data-date')
+      generateTranscription(date)
+    })
+  })
+  
+  // Toggle transcript view buttons
+  document.querySelectorAll('.toggle-transcript-btn').forEach(button => {
+    button.addEventListener('click', (e) => {
+      const date = e.target.getAttribute('data-date')
+      toggleTranscript(date)
+    })
+  })
 }
 
 // Run checks and load data on startup
@@ -255,3 +329,97 @@ stopBtn.addEventListener('click', () => {
     stopRecording()
   }
 })
+
+// Transcription: Generate transcription for selected date
+async function generateTranscription(selectedDate) {
+  const statusElement = document.getElementById(`status-${selectedDate}`)
+  
+  if (!selectedDate) {
+    if (statusElement) statusElement.innerText = 'Error: No date provided'
+    return
+  }
+  
+  try {
+    // Find and disable the button for this date
+    const buttons = document.querySelectorAll(`button[onclick*="${selectedDate}"]`)
+    buttons.forEach(btn => btn.disabled = true)
+    
+    if (statusElement) statusElement.innerText = `Checking recordings for ${selectedDate}...`
+    
+    // Step 1: Get list of audio files for this date
+    const dayResult = await window.audioAPI.transcribeDay(selectedDate)
+    
+    if (!dayResult.success) {
+      if (statusElement) statusElement.innerText = `Error: ${dayResult.error}`
+      buttons.forEach(btn => btn.disabled = false)
+      return
+    }
+    
+    console.log(`[transcription] Found ${dayResult.count} files to transcribe`)
+    if (statusElement) statusElement.innerText = `Found ${dayResult.count} audio file(s). Starting transcription...`
+    
+    // Step 2: Transcribe each audio file
+    let completedCount = 0
+    const errors = []
+    
+    for (const file of dayResult.files) {
+      if (statusElement) statusElement.innerText = `Transcribing ${file.session}/${file.filename} (${completedCount + 1}/${dayResult.count})...`
+      console.log(`[transcription] Processing: ${file.filename}`)
+      
+      const transcribeResult = await window.audioAPI.runWhisperTranscription(file.path)
+      
+      if (transcribeResult.success) {
+        completedCount++
+        console.log(`[transcription] Completed: ${file.filename}`)
+      } else {
+        console.error(`[transcription] Failed: ${file.filename}`, transcribeResult.error)
+        errors.push(`${file.filename}: ${transcribeResult.error}`)
+      }
+    }
+    
+    if (completedCount === 0) {
+      if (statusElement) statusElement.innerText = `Error: All transcriptions failed. ${errors.join('; ')}`
+      buttons.forEach(btn => btn.disabled = false)
+      return
+    }
+    
+    // Step 3: Merge all transcripts into one file
+    if (statusElement) statusElement.innerText = 'Merging transcripts...'
+    const mergeResult = await window.audioAPI.mergeTranscripts(selectedDate)
+    
+    if (!mergeResult.success) {
+      if (statusElement) statusElement.innerText = `Error merging transcripts: ${mergeResult.error}`
+      buttons.forEach(btn => btn.disabled = false)
+      return
+    }
+    
+    console.log(`[transcription] Merged ${mergeResult.segmentCount} segments`)
+    
+    // Step 4: Reload the recordings list to show the new transcript
+    await loadRecordingsList()
+    
+    console.log(`✓ Transcription complete for ${selectedDate}`)
+    
+  } catch (error) {
+    console.error('[transcription] Unexpected error:', error)
+    if (statusElement) statusElement.innerText = `Unexpected error: ${error.message}`
+    const buttons = document.querySelectorAll(`button[onclick*="${selectedDate}"]`)
+    buttons.forEach(btn => btn.disabled = false)
+  }
+}
+
+// Toggle transcript visibility for a specific date
+function toggleTranscript(date) {
+  const transcriptDiv = document.getElementById(`transcript-${date}`)
+  const button = document.querySelector(`.toggle-transcript-btn[data-date="${date}"]`)
+  
+  if (transcriptDiv && button) {
+    if (transcriptDiv.style.display === 'none') {
+      transcriptDiv.style.display = 'block'
+      button.innerText = 'Hide Transcript'
+    } else {
+      transcriptDiv.style.display = 'none'
+      button.innerText = 'View Transcript'
+    }
+  }
+}
