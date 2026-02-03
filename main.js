@@ -475,7 +475,21 @@ app.whenReady().then(() => {
             console.log('[generate-diary] Starting for path:', dayPath)
             
             // Check if transcript exists
-            const transcriptPath = path.join(dayPath, 'transcript.txt')
+
+            // Find transcript file (matches transcript-*.txt or transcript.txt)
+            const filesInDayPath = fs.readdirSync(dayPath)
+            const transcriptFile = filesInDayPath.find(file => 
+                file.startsWith('transcript') && file.endsWith('.txt')
+            )
+
+            if (!transcriptFile) {
+                return {
+                    success: false,
+                    error: 'Transcript file not found. Please transcribe the audio first.'
+                }
+            }
+
+            const transcriptPath = path.join(dayPath, transcriptFile)
             if (!fs.existsSync(transcriptPath)) {
                 return {
                     success: false,
