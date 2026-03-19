@@ -32,7 +32,11 @@ const createWindow = () => {
     }
   })
 
-  win.loadFile('index.html')
+  if (app.isPackaged) {
+    win.loadFile(path.join(__dirname, 'dist/index.html'))
+  } else {
+    win.loadURL('http://localhost:5173')
+  }
 }
 
 app.whenReady().then(() => {

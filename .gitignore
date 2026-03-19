@@ -143,3 +143,6 @@ vite.config.ts.timestamp-*
 
 #Github
 .github/
+
+# DOCS
+docs/
