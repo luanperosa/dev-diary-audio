@@ -5,31 +5,37 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-npm run start    # Start Vite dev server + Electron (runs both concurrently)
-npm run package  # Build React (vite build) then package with electron-forge
-npm run make     # Build React then create platform-specific installers
+npm run start    # Start dev (electron-vite handles Vite dev server + Electron together)
+npm run package  # Build with electron-vite then package with electron-forge
+npm run make     # Build then create platform-specific installers
 ```
 
 There are no tests configured (`npm test` exits with error).
 
 ## Architecture
 
-This is an **Electron desktop app** with a strict main/renderer process separation:
+This is an **Electron desktop app** using `electron-vite` for building and dev server management. The three processes map directly to the directory structure:
 
-- **`main.js`** — Main process. All IPC handlers live here. Handles file I/O, spawns external processes (ffmpeg, whisper CLI), and manages the OpenAI API call via the adapter. In dev it loads `http://localhost:5173`; in production it loads `dist/index.html`. Must stay **CommonJS** (`require`) — Electron's main process does not support ESM.
-- **`preload.js`** — Context bridge. Exposes `window.audioAPI` and `window.versions` to the renderer. All renderer→main communication must go through these exposed methods. Also must stay **CommonJS**.
-- **`src/`** — React frontend (Vite/ESM). Entry point is `src/main.jsx` → `src/App.jsx` → components.
-- **`renderer.js`** — Dead code, leftover from before the React migration. Ignore it.
+- **`src/main/index.js`** — Main process. All IPC handlers live here. Handles file I/O, spawns external processes (ffmpeg, whisper CLI), manages the OpenAI API call via the adapter. Must stay **CommonJS** (`require`) — Electron main process does not support ESM.
+- **`src/preload/index.js`** — Context bridge. Exposes `window.audioAPI` and `window.versions`. Must stay **CommonJS**.
+- **`src/renderer/`** — React frontend (Vite/ESM). Entry: `main.jsx` → `App.jsx` → components.
+- **`renderer.js`** (root) — Dead code, leftover from before the React migration. Ignore it.
+
+In dev, `electron-vite dev` sets `ELECTRON_RENDERER_URL` and main loads from it. In production, it loads `dist/renderer/index.html`. Build output goes to `dist/` (gitignored). The `out/` directory (also gitignored) is created by electron-forge during packaging.
+
+### Build Details
+
+`electron.vite.config.js` defines three build targets outputting to `dist/main/`, `dist/preload/`, and `dist/renderer/`. A custom `copyLibPlugin` copies `src/main/lib/` to `dist/main/lib/` after each build because electron-vite's SSR mode doesn't follow CJS `require()` into local files. The `externalizeDepsPlugin` keeps Node dependencies external for main and preload.
 
 ### IPC Communication Pattern
 
-The renderer calls `window.audioAPI.*` methods (defined in `preload.js`), which invoke IPC channels handled in `main.js`. Adding a new feature requires touching all three files: add the handler in `main.js`, expose it in `preload.js`, call it from `src/` React code.
+The renderer calls `window.audioAPI.*` methods (defined in `src/preload/index.js`), which invoke IPC channels in `src/main/index.js`. Adding a new feature requires touching all three: add handler in main, expose it in preload, call it from renderer React code.
 
 ### React Frontend Structure
 
-- `src/App.jsx` — All recording state + logic. Uses `useRef` for mutable imperative handles (MediaRecorder, AudioStream, session path). Passes `onRefresh` down to reload the recordings list after transcription/diary generation.
-- `src/components/DayCard.jsx` — Manages per-day state (transcript/diary visibility, transcription progress, diary generation). Contains the multi-step transcription flow.
-- `src/components/RecordingsList.jsx`, `RecordingControls.jsx`, `WhisperBanner.jsx` — Presentational components.
+- `src/renderer/App.jsx` — All recording state + logic. Uses `useRef` for mutable imperative handles (MediaRecorder, AudioStream, session path). Passes `onRefresh` down to reload recordings after transcription/diary generation.
+- `src/renderer/components/DayCard.jsx` — Per-day state (transcript/diary visibility, transcription progress, diary generation). Contains the multi-step transcription flow.
+- `src/renderer/components/RecordingsList.jsx`, `RecordingControls.jsx`, `WhisperBanner.jsx` — Presentational components.
 
 ### Audio Recording Pipeline
 
@@ -47,21 +53,22 @@ The renderer calls `window.audioAPI.*` methods (defined in `preload.js`), which 
 
 ### Diary Generation
 
-Uses an adapter pattern in `lib/api/`:
+Uses an adapter pattern in `src/main/lib/api/`:
 - `adapter.js` — Abstract base class with `generateDiary()`, `validate()`, `getName()`
 - `openai-adapter.js` — Concrete implementation using Node's built-in `https` module (no SDK dependency)
-- `lib/prompts/diary-prompt.js` — Prompt templates (used by `main.js`, overriding the adapter's built-in defaults)
+- `src/main/lib/prompts/diary-prompt.js` — Prompt templates passed by the `generate-diary` IPC handler in `src/main/index.js`, overriding the adapter's built-in defaults
 
-To add a new AI provider, extend `APIAdapter` and instantiate it in the `generate-diary` IPC handler in `main.js`.
+To add a new AI provider, extend `APIAdapter` and instantiate it in the `generate-diary` IPC handler in `src/main/index.js`.
 
 ### Configuration
 
 Requires a `.env` file at the project root (copy from `.env.example`):
 ```env
 OPENAI_API_KEY=sk-...
-OPENAI_MODEL=gpt-4o-mini
-OPENAI_MAX_TOKENS=4000
-OPENAI_TEMPERATURE=0.7
+OPENAI_MODEL=gpt-4o-mini       # default: gpt-4o-mini
+OPENAI_MAX_TOKENS=2000          # default: 2000
 ```
+
+Temperature is hardcoded to `0.7` in the adapter. The adapter also reads `OPENAI_TIMEOUT` (seconds, default `60`).
 
 External CLI dependencies required at runtime: **ffmpeg** and **whisper** (Python `openai-whisper` package, model hardcoded to `small`).
